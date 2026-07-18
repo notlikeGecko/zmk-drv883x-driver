@@ -183,6 +183,8 @@ static const struct sensor_driver_api drv883x_driver_api = {
 
 #define GET_PWM_SPEC(n, prop, i) PWM_DT_SPEC_GET_BY_IDX(n, i)
 
+#define CONFIG_SENSOR_INIT_PRIORITY 10
+
 #define DRV883X_DEFINE(n)                                                      \
     static struct drv883x_data data##n;                                        \
     static const struct drv883x_config config##n = {                           \
