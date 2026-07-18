@@ -7,6 +7,7 @@
 #define DT_DRV_COMPAT zmk_behavior_drv883x
 
 #include <zephyr/device.h>
+#include <zephyr/kernel.h>
 #include <drivers/behavior.h>
 #include <zephyr/logging/log.h>
 
@@ -30,7 +31,29 @@ struct behavior_drv883x_config {
 
 struct behavior_drv883x_data {
     const struct device *dev;
+    struct k_work_delayable stop_work;
+    uint32_t last_chan;
 };
+
+static void drv883x_stop_work_handler(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    // get struct data using CONTAINER_OF macro
+    struct behavior_drv883x_data *data = CONTAINER_OF(dwork, struct behavior_drv883x_data, stop_work);
+    const struct device *dev = data->dev;
+    const struct behavior_drv883x_config *cfg = dev->config;
+    const struct device *drv883x_dev = cfg->drv883x_dev;
+
+    struct sensor_value val = { .val1 = 0, .val2 = 0 };
+
+    // disable motor
+    sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, (enum sensor_attribute) DRV883X_ATTR_ENABLE, &val);
+
+    // sync changes
+    val.val1 = data->last_chan;
+    sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, (enum sensor_attribute) DRV883X_ATTR_SYNC, &val);
+    
+    LOG_DBG("Motor auto-stopped");
+}
 
 static int drv883x_binding_pressed(struct zmk_behavior_binding *binding,
                                    struct zmk_behavior_binding_event event) {
@@ -86,6 +109,9 @@ static int drv883x_binding_pressed(struct zmk_behavior_binding *binding,
         return -EIO;
     }
 
+    data->last_chan = chan;
+    k_work_reschedule(&data->stop_work, K_MSEC(500));
+
     return ZMK_BEHAVIOR_OPAQUE;
 }
 
@@ -99,6 +125,7 @@ static int drv883x_binding_released(struct zmk_behavior_binding *binding,
 static int behavior_drv883x_init(const struct device *dev) {
     struct behavior_drv883x_data *data = dev->data;
     data->dev = dev;
+    k_work_init_delayable(&data->stop_work, drv883x_stop_work_handler);
     return 0;
 };
 
@@ -107,7 +134,7 @@ static const struct behavior_driver_api behavior_drv883x_driver_api = {
     .binding_released = drv883x_binding_released,
 };
 
-#define ZMK_BEHAVIOR_DRV883X_PRIORITY 11
+#define ZMK_BEHAVIOR_DRV883X_PRIORITY 91
 
 #define DRV883X_BEH_INST(n)                                             \
     static struct behavior_drv883x_data data_##n = {};                  \
