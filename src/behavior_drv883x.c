@@ -111,7 +111,7 @@ static int drv883x_binding_pressed(struct zmk_behavior_binding *binding,
     }
 
     data->last_chan = chan;
-    k_work_reschedule(&data->stop_work, K_MSEC(500));
+    k_work_reschedule(&data->stop_work, K_MSEC(50));
 
     return ZMK_BEHAVIOR_OPAQUE;
 }
