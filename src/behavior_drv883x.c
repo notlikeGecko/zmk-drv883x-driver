@@ -107,7 +107,7 @@ static const struct behavior_driver_api behavior_drv883x_driver_api = {
     .binding_released = drv883x_binding_released,
 };
 
-#define ZMK_BEHAVIOR_DRV883X_PRIORITY 91
+#define ZMK_BEHAVIOR_DRV883X_PRIORITY 11
 
 #define DRV883X_BEH_INST(n)                                             \
     static struct behavior_drv883x_data data_##n = {};                  \
