@@ -60,6 +60,7 @@ static int drv883x_binding_pressed(struct zmk_behavior_binding *binding,
     LOG_DBG("position %d drv883x: 0x%02X 0x%02X", event.position, binding->param1, binding->param2);
     const struct device *dev = zmk_behavior_get_binding(binding->behavior_dev);
     // struct behavior_drv883x_data *data = (struct behavior_drv883x_data *)dev->data;
+    struct behavior_drv883x_data *data = dev->data;
     const struct behavior_drv883x_config *cfg = dev->config;
 
     int err = 0;
