@@ -21,8 +21,6 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-// #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
-
 struct behavior_drv883x_config {
     const struct device *drv883x_dev;
     uint32_t vel_neutral;
@@ -37,7 +35,6 @@ struct behavior_drv883x_data {
 
 static void drv883x_stop_work_handler(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-    // get struct data using CONTAINER_OF macro
     struct behavior_drv883x_data *data = CONTAINER_OF(dwork, struct behavior_drv883x_data, stop_work);
     const struct device *dev = data->dev;
     const struct behavior_drv883x_config *cfg = dev->config;
@@ -45,81 +42,83 @@ static void drv883x_stop_work_handler(struct k_work *work) {
 
     struct sensor_value val = { .val1 = 0, .val2 = 0 };
 
-    // disable motor
     sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, (enum sensor_attribute) DRV883X_ATTR_ENABLE, &val);
 
-    // sync changes
     val.val1 = data->last_chan;
     sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, (enum sensor_attribute) DRV883X_ATTR_SYNC, &val);
-    
+
     LOG_DBG("Motor auto-stopped");
 }
 
-static int drv883x_binding_pressed(struct zmk_behavior_binding *binding,
-                                   struct zmk_behavior_binding_event event) {
-    LOG_DBG("position %d drv883x: 0x%02X 0x%02X", event.position, binding->param1, binding->param2);
-    const struct device *dev = zmk_behavior_get_binding(binding->behavior_dev);
-    // struct behavior_drv883x_data *data = (struct behavior_drv883x_data *)dev->data;
-    struct behavior_drv883x_data *data = dev->data;
+static int drive_motor(const struct device *dev, uint32_t chan, int16_t vel) {
     const struct behavior_drv883x_config *cfg = dev->config;
-
-    int err = 0;
+    struct behavior_drv883x_data *data = dev->data;
     const struct device *drv883x_dev = cfg->drv883x_dev;
     struct sensor_value val = { .val1 = 0, .val2 = 0 };
+    int err;
 
-    uint32_t chan = binding->param1;
-    int16_t vel = binding->param2 - cfg->vel_neutral;
-
-    // crop min-max velocity value
     if (vel > 0 && vel > cfg->vel_min_max) {
         vel = cfg->vel_min_max;
     } else if (vel < 0 && vel < -cfg->vel_min_max) {
         vel = -cfg->vel_min_max;
     }
 
-    // enable enable pin, disable iif vel == 0
+    // Enable
     val.val1 = (!vel) ? 0 : 1;
     val.val2 = 0;
-    err = sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, 
-                          (enum sensor_attribute) DRV883X_ATTR_ENABLE, &val);
-    if (err) {
-        LOG_WRN("Fail to sensor_attr_set DRV883X_ATTR_ENABLE");
-        return -EIO;
-    }
+    err = sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, (enum sensor_attribute) DRV883X_ATTR_ENABLE, &val);
+    if (err) return err;
 
-    // set velocity and inversr flag
+    // velocity and direction
     val.val1 = abs(vel);
     val.val2 = vel < 0;
-    err = sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, 
-                          (enum sensor_attribute) DRV883X_ATTR_VELOCITY, &val);
-    if (err) {
-        LOG_WRN("Fail to sensor_attr_set DRV883X_ATTR_VELOCITY");
-        return -EIO;
-    }
+    err = sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, (enum sensor_attribute) DRV883X_ATTR_VELOCITY, &val);
+    if (err) return err;
 
-    // call sync to latch velocity setting to driver
-    //
-    // ** NOTE**: val1 is ignored currently. only ONE channel is implemented.
-    //
+    // Sync settings
     val.val1 = chan;
     val.val2 = 0;
-    err = sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, 
-                          (enum sensor_attribute) DRV883X_ATTR_SYNC, &val);
-    if (err) {
-        LOG_WRN("Fail to sensor_attr_set DRV883X_ATTR_SYNC");
-        return -EIO;
-    }
+    err = sensor_attr_set(drv883x_dev, SENSOR_CHAN_ALL, (enum sensor_attribute) DRV883X_ATTR_SYNC, &val);
+    if (err) return err;
 
+    // 50ms timer
     data->last_chan = chan;
     k_work_reschedule(&data->stop_work, K_MSEC(50));
+
+    return 0;
+}
+
+static int drv883x_binding_pressed(struct zmk_behavior_binding *binding,
+                                   struct zmk_behavior_binding_event event) {
+    LOG_DBG("position %d drv883x pressed", event.position);
+    const struct device *dev = zmk_behavior_get_binding(binding->behavior_dev);
+    const struct behavior_drv883x_config *cfg = dev->config;
+
+    uint32_t chan = binding->param1;
+    int16_t vel = binding->param2 - cfg->vel_neutral; // positive direction
+
+    if (drive_motor(dev, chan, vel) != 0) {
+        LOG_WRN("Fail to drive motor on pressed");
+        return -EIO;
+    }
 
     return ZMK_BEHAVIOR_OPAQUE;
 }
 
 static int drv883x_binding_released(struct zmk_behavior_binding *binding,
                                     struct zmk_behavior_binding_event event) {
-    LOG_DBG("position %d drv883x: 0x%02X 0x%02X", event.position, binding->param1, binding->param2);
-    // const struct device *dev = zmk_behavior_get_binding(binding->behavior_dev);
+    LOG_DBG("position %d drv883x released", event.position);
+    const struct device *dev = zmk_behavior_get_binding(binding->behavior_dev);
+    const struct behavior_drv883x_config *cfg = dev->config;
+
+    uint32_t chan = binding->param1;
+    int16_t vel = -(binding->param2 - cfg->vel_neutral); // negative direction
+
+    if (drive_motor(dev, chan, vel) != 0) {
+        LOG_WRN("Fail to drive motor on released");
+        return -EIO;
+    }
+
     return ZMK_BEHAVIOR_OPAQUE;
 }
 
@@ -137,19 +136,17 @@ static const struct behavior_driver_api behavior_drv883x_driver_api = {
 
 #define ZMK_BEHAVIOR_DRV883X_PRIORITY 91
 
-#define DRV883X_BEH_INST(n)                                             \
+#define DRV883X_BEH_INST(n)                                              \
     static struct behavior_drv883x_data data_##n = {};                  \
-    static struct behavior_drv883x_config config_##n = {                \
-        .drv883x_dev = DEVICE_DT_GET(DT_INST_PHANDLE(n, drv883x_dev)),  \
+    static struct behavior_drv883x_config config_##n = {                 \
+        .drv883x_dev = DEVICE_DT_GET(DT_INST_PHANDLE(n, drv883x_dev)),   \
         .vel_neutral = DT_PROP(DT_DRV_INST(n), vel_neutral),            \
         .vel_min_max = DT_PROP(DT_DRV_INST(n), vel_min_max),            \
-    };                                                                  \
-    BEHAVIOR_DT_INST_DEFINE(n, behavior_drv883x_init, NULL,             \
-                            &data_##n, &config_##n,                     \
-                            POST_KERNEL,                                \
-                            ZMK_BEHAVIOR_DRV883X_PRIORITY,              \
+    };                                                                   \
+    BEHAVIOR_DT_INST_DEFINE(n, behavior_drv883x_init, NULL,              \
+                            &data_##n, &config_##n,                      \
+                            POST_KERNEL,                                 \
+                            ZMK_BEHAVIOR_DRV883X_PRIORITY,               \
                             &behavior_drv883x_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(DRV883X_BEH_INST)
-
-// #endif /* DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT) */
